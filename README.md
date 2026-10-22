@@ -4,7 +4,9 @@ Amon LHAW is a language-neutral secret-loading design with its first
 implementation as an in-process Go library. It lets an application read
 configuration through `lhaw.Getenv` and `lhaw.LookupEnv`, with source
 precedence of BWS secrets, `.env`, then the process environment. It never
-changes `os.Environ` or writes secret values to disk.
+changes machine-wide settings or writes secret values to disk. `lhaw.Load`
+installs the resolved values into the current process environment, so existing
+`os.Getenv` calls and environment-based libraries can read them too.
 
 ## Go quick start
 
@@ -44,15 +46,19 @@ then used.
 {"selector":"local-dev"}
 ```
 
-An explicit `Load("...")` selector takes precedence. The `.env` file is
-parsed privately and does not mutate the process environment. If a selected
-provider is configured but retrieval fails, `Load` returns an error. Missing
-individual keys fall through by source precedence.
+An explicit `Load("...")` selector takes precedence. LHAW parses `.env`
+privately, resolves the source precedence, then sets the resolved values in the
+current process environment. This lets existing calls to `os.Getenv` continue
+working. Since environment variables are process-global and inherited by child
+processes, use one project per application process. If a selected provider is
+configured but retrieval fails, `Load` returns an error. Missing individual
+keys fall through by source precedence.
 
 LHAW supports one selected project per process. Multiple separate app
-processes can load different projects concurrently without sharing LHAW's
-in-memory state. Any code that can inspect or control the app process can
-access values that the app has loaded; use appropriately scoped BWS accounts.
+processes can load different projects concurrently because each process has
+its own environment. Any code running as part of the app or a child process
+that inherits its environment can access loaded values; use appropriately
+scoped BWS accounts.
 
 ## Repository layout
 

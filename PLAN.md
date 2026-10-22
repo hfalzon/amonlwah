@@ -3,7 +3,7 @@
 ## Goal
 
 Amon LHAW is a language-neutral library design, implemented in Go first, that
-loads a selected project's credentials into the application's private runtime
+loads a selected project's credentials into the application's runtime
 state. The repository reserves separate JavaScript and Rust package locations
 for later implementations. Application code reads values through a
 language-appropriate `getenv`/`lookupEnv` API, without knowing whether values
@@ -43,10 +43,12 @@ apiKey, ok := lhaw.LookupEnv("API_KEY")
 precedence; when omitted, LHAW reads an optional project selector from its
 configuration. The selector is not a credential.
 
-`Getenv` returns the selected value or an empty string. `LookupEnv` returns the
-value and whether it was present, including when the value is empty. `Load`
-returns errors for invalid configuration or a configured provider that fails
-to authenticate or load.
+`Load` resolves sources and installs the resolved values into the current
+process environment. `Getenv` and `LookupEnv` delegate to Go's standard
+environment lookup behavior. Existing application code using `os.Getenv`
+therefore sees LHAW-loaded values without needing to migrate every call site.
+`Load` returns errors for invalid configuration or a configured provider that
+fails to authenticate or load.
 
 ## Project and credential resolution
 
@@ -69,8 +71,8 @@ failure.
 
 ## Value lookup precedence
 
-LHAW loads candidate values into separate in-memory layers and resolves each
-requested key in this order:
+LHAW loads candidate values into separate maps, resolves conflicts in this
+order, and installs the result in the current process environment:
 
 1. Selected BWS project's secrets
 2. `.env` values
@@ -78,17 +80,20 @@ requested key in this order:
 
 If a key is absent from one layer, lookup proceeds to the next. A provider
 failure is an error; a missing key is not. Duplicate keys use the first value
-in the precedence order above.
+in the precedence order above. Existing process variables remain as the final
+fallback and are not overwritten unless a higher-precedence source supplies
+that key.
 
-Parse `.env` into a map. Do not use a dotenv helper that mutates the process
-environment, since that would merge the sources and obscure their precedence.
-LHAW should not write retrieved values to files or change machine-wide
-environment variables.
+Parse `.env` into a private map first so source precedence remains explicit.
+After resolution, use `os.Setenv` to install values in this application
+process, allowing existing `os.Getenv` consumers and dotenv loaders that
+preserve already-set variables to work. LHAW does not write retrieved values
+to files or change machine-wide settings.
 
 ## Runtime and concurrency model
 
 - One LHAW load corresponds to one project per Go process.
-- Keep loaded values in process-local memory; do not persist a shared cache.
+- Load values into the process environment; do not persist a shared cache.
 - Separate app processes may load different projects concurrently. Each calls
   `lhaw.Load` with its own selector and retains its own values.
 - Make initialization and lookups safe against concurrent goroutines in the
@@ -144,16 +149,18 @@ environment variables.
 - Implement JavaScript and Rust packages in their reserved directories after
   stabilizing the Go API and provider contract. Go lives in its own `go/`
   package directory alongside `javascript/` and `rust/`.
-- Preserve per-process isolation and avoid mutating process-wide environment
-  variables in each implementation.
+- Preserve the process-local environment behavior required for compatibility
+  with each language's standard environment lookup APIs.
 
 ## Security boundary
 
 Amon Hen keeps its stored token in the OS credential store and passes it to the
 BWS child process. LHAW loads the resulting application secret values into the
-app process. This avoids passing the BWS token into application configuration,
-but does not isolate secrets from an agent that can invoke Amon Hen or inspect
-or control the app/BWS runtime as the same OS user.
+app process environment. The values are visible to code that can inspect or
+control that process and may be inherited by child processes. This avoids
+passing the BWS token into application configuration, but does not isolate
+secrets from an agent that can invoke Amon Hen or inspect or control the
+app/BWS runtime as the same OS user.
 
 Use narrowly scoped, preferably read-only BWS machine accounts. Do not write
 tokens or secret values to source files, `.env` files, command arguments,

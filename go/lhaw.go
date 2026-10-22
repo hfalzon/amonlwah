@@ -1,5 +1,5 @@
 // Package lhaw loads application configuration from Amon Hen, a .env file,
-// and the process environment without changing the process environment.
+// and the process environment into the current process environment.
 package lhaw
 
 import (
@@ -41,7 +41,8 @@ var state struct {
 	v      values
 }
 
-// Load discovers the project selector and snapshots all configured sources.
+// Load discovers the project selector and installs resolved values into the
+// current process environment.
 // At most one project may be loaded in a process. Calling Load again with the
 // same effective selector is harmless; a different selector returns an error.
 func Load(selector ...string) error {
@@ -59,17 +60,7 @@ func Load(selector ...string) error {
 	if err != nil {
 		return err
 	}
-	state.Lock()
-	defer state.Unlock()
-	if state.loaded {
-		if state.v.name == v.name {
-			return nil
-		}
-		return fmt.Errorf("lhaw: already loaded selector %q; one project per process is supported", state.v.name)
-	}
-	state.v = v
-	state.loaded = true
-	return nil
+	return install(v)
 }
 
 // LoadWithConfig is the explicit configuration variant of Load.
@@ -83,6 +74,10 @@ func LoadWithConfig(cfg Config) error {
 	if err != nil {
 		return err
 	}
+	return install(v)
+}
+
+func install(v values) error {
 	state.Lock()
 	defer state.Unlock()
 	if state.loaded {
@@ -91,28 +86,36 @@ func LoadWithConfig(cfg Config) error {
 		}
 		return fmt.Errorf("lhaw: already loaded selector %q; one project per process is supported", state.v.name)
 	}
-	state.v, state.loaded = v, true
+
+	for _, layer := range []map[string]string{v.dot, v.bws} {
+		for key, value := range layer {
+			if key == "" || strings.ContainsAny(key, "=\x00") || strings.ContainsRune(value, '\x00') {
+				return fmt.Errorf("lhaw: cannot install invalid environment entry %q", key)
+			}
+		}
+	}
+	// Install provider and dotenv values in precedence order. Existing process
+	// variables remain in place as the final fallback. This intentionally makes
+	// standard os.Getenv and libraries such as godotenv consumers compatible.
+	for _, layer := range []map[string]string{v.dot, v.bws} {
+		for key, value := range layer {
+			if err := os.Setenv(key, value); err != nil {
+				return fmt.Errorf("lhaw: install value for %q in process environment: %w", key, err)
+			}
+		}
+	}
+	state.v = v
+	state.loaded = true
 	return nil
 }
 
-// Getenv returns the value associated with key, or "" if it is absent.
-func Getenv(key string) string { value, _ := LookupEnv(key); return value }
+// Getenv returns the current process environment value for key, or "" if absent.
+func Getenv(key string) string { return os.Getenv(key) }
 
 // LookupEnv returns the selected value and reports whether it exists. An
-// explicitly empty value is present.
-func LookupEnv(key string) (string, bool) {
-	state.RLock()
-	defer state.RUnlock()
-	if !state.loaded {
-		return "", false
-	}
-	for _, layer := range []map[string]string{state.v.bws, state.v.dot, state.v.env} {
-		if v, ok := layer[key]; ok {
-			return v, true
-		}
-	}
-	return "", false
-}
+// explicitly empty value is present. This has the same semantics as
+// os.LookupEnv.
+func LookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
 
 func readConfig(cfg Config) (Config, error) {
 	path := cfg.ConfigPath
