@@ -4,6 +4,8 @@ Load an application's project configuration inside Go. Manage the project's
 machine-account token in Amon Hen once; start the Go application normally.
 No shell wrapper or token argument is required in everyday use.
 
+> Amon Lhaw, a fortified hill on the Eastern bank of the Anduin. Now in ruins. It was once called the Hill of Hearing.
+
 ```go
 import lhaw "github.com/hfalzon/amonlwah/go"
 
