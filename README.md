@@ -1,71 +1,101 @@
 # Amon Lhaw
 
-Amon LHAW is a language-neutral secret-loading design with its first
-implementation as an in-process Go library. It lets an application read
-configuration through `lhaw.Getenv` and `lhaw.LookupEnv`, with source
-precedence of BWS secrets, `.env`, then the process environment. It never
-changes machine-wide settings or writes secret values to disk. `lhaw.Load`
-installs the resolved values into the current process environment, so existing
-`os.Getenv` calls and environment-based libraries can read them too.
-
-## Go quick start
+Load an application's project configuration inside Go. Manage the project's
+machine-account token in Amon Hen once; start the Go application normally.
+No shell wrapper or token argument is required in everyday use.
 
 ```go
-package main
+import lhaw "github.com/hfalzon/amonlwah/go"
 
-import (
-	"log"
+if err := lhaw.Load("gadget-dev"); err != nil {
+    return err
+}
+// Existing os.Getenv consumers now see the selected project's values.
+```
 
-	lhaw "github.com/hfalzon/amonlwah/go"
-)
+For tests, call the loader from each participating package's TestMain, using
+one shared application-owned test helper if desired:
 
-func main() {
-	if err := lhaw.Load("local-dev"); err != nil {
-		log.Fatal(err)
-	}
-	apiKey := lhaw.Getenv("API_KEY")
-	if databaseURL, ok := lhaw.LookupEnv("DATABASE_URL"); ok {
-		_ = databaseURL
-	}
-	_ = apiKey
+```go
+func TestMain(m *testing.M) {
+    if err := lhaw.Load("gadget-dev"); err != nil {
+        fmt.Fprintln(os.Stderr, err)
+        os.Exit(1)
+    }
+    os.Exit(m.Run())
 }
 ```
 
-The application starts normally; LHAW loads values inside its process. For
-local development, `local-dev` first resolves as an Amon Hen project name.
-LHAW asks Amon Hen to run BWS for that project's UUID and reads the returned
-JSON. The BWS access token remains with the Amon Hen/BWS child process and is
-not added to the application environment. If no such Amon Hen project exists,
-the selector is interpreted as the name of a value in `.env` or the process
-environment containing a BWS project UUID; direct BWS CLI authentication is
-then used.
+Run normal Go commands. Packages are separate test processes, so each process
+initializes once. Framework libraries need no dependency on Lhaw.
 
-`Load()` can read an optional `.lhaw.json` selector:
+## Project selection and authentication
 
-```json
-{"selector":"local-dev"}
+A selector first resolves as an Amon Hen project name. Internally Lhaw runs
+Amon Hen's project lookup and token-wrapped BWS retrieval using argument arrays,
+without `bws run` or a command shell. Install Amon Hen and BWS once and make
+those executables available on PATH; explicit binary paths are also supported.
+The machine-account token stays in the Amon Hen/BWS child process on this path.
+
+If the project does not exist in Amon Hen, the selector is interpreted as an
+environment-variable name containing the project UUID. Missing Amon Hen also
+allows this direct path. Authentication or provider failures never silently
+fall back to local credentials.
+
+An explicit UUID skips Amon Hen lookup:
+
+```go
+err := lhaw.LoadWithConfig(lhaw.Config{
+    ProjectID: "12345678-1234-4123-8123-123456789abc",
+})
 ```
 
-An explicit `Load("...")` selector takes precedence. LHAW parses `.env`
-privately, resolves the source precedence, then sets the resolved values in the
-current process environment. This lets existing calls to `os.Getenv` continue
-working. Since environment variables are process-global and inherited by child
-processes, use one project per application process. If a selected provider is
-configured but retrieval fails, `Load` returns an error. Missing individual
-keys fall through by source precedence.
+This direct path requires BWS authentication already configured. A UUID alone
+is not authentication. Supplying both Selector and ProjectID is an error.
 
-LHAW supports one selected project per process. Multiple separate app
-processes can load different projects concurrently because each process has
-its own environment. Any code running as part of the app or a child process
-that inherits its environment can access loaded values; use appropriately
-scoped BWS accounts.
+## Configuration discovery
 
-## Repository layout
+An optional `.lhaw.json` can contain `selector`, `project_id`, and `dotenv_path`.
+Explicit project selection overrides the file's selection. Starting at the
+working directory, discovery walks upward to the nearest `.lhaw.json` or
+`go.mod`, so nested test packages find module-root configuration. It does not
+walk beyond that module boundary. `RootDir` and `ConfigPath` provide explicit
+anchors; an explicitly named missing config file is an error. Relative dotenv
+paths resolve beside the config file, not beside the test package.
 
-- `go/`: Go module and initial library implementation.
-- `javascript/`: reserved for the future JavaScript package.
-- `rust/`: reserved for the future Rust crate.
-- `PLAN.md`: design and implementation roadmap.
+A missing `.env` is normal. Value priority remains provider, dotenv, then the
+existing environment. A dotenv BWS token is authentication input only and is
+not installed into the application environment. This is compatibility support;
+Amon Hen is the recommended local authentication path.
 
-The JavaScript and Rust directories currently document the shared contract;
-their libraries are not implemented yet.
+## Reliability and safety
+
+- `LoadContext` and `LoadWithConfigContext` support cancellation. All loads
+  have a 30-second default deadline, configurable with `Config.Timeout`.
+  Cancellation terminates provider process trees on Windows and Unix.
+- Concurrent loads are serialized. The same successfully selected project is
+  reused without another provider call. Failures remain retryable. A different
+  project requires another process.
+- Duplicate provider/dotenv names are rejected, with case-insensitive matching
+  on Windows. Reserved runtime and authentication names are rejected before
+  installation, protecting PATH, PATHEXT, temporary directories, and BWS control
+  variables. Environment validation completes before any value is installed;
+  installation failures restore previous values.
+- Provider errors exclude captured output, which could contain credentials.
+- `Config.Provider` accepts a context-aware `Provider` implementation. Tests can
+  use fake providers without installing tools or accessing real credentials.
+- Application credentials are installed in the process environment and can be
+  read by code in that process and inherited by its children. This is configuration
+  loading, not isolation from code running in the application.
+- Initialize before starting application goroutines or child processes. Installing
+  several environment variables is not an atomic snapshot for unrelated readers.
+
+The default provider currently integrates through the installed CLIs internally.
+The provider interface permits a future supported Amon Hen Go API without changing
+application startup code. JavaScript and Rust implementations remain planned.
+
+## Verification
+
+Run `go test ./...` from `go/`. Tests use temporary directories, synthetic values,
+and helper processes; they do not access the OS credential store or live services.
+CI runs these checks on Windows, Linux, and macOS with Go 1.23 and the current Go.
