@@ -180,6 +180,12 @@ func readConfig(cfg Config) (Config, error) {
 	} else if explicit || !errors.Is(err, os.ErrNotExist) {
 		return cfg, fmt.Errorf("lhaw: read configuration: %w", err)
 	}
+	if cfg.Selector == "" && cfg.ProjectID == "" && cfg.Provider == nil {
+		cfg.Selector, _, err = discoverBrokerGrant(root, "")
+		if err != nil {
+			return cfg, err
+		}
+	}
 	if cfg.Selector != "" && cfg.ProjectID != "" {
 		return cfg, errors.New("lhaw: choose selector or project_id")
 	}
@@ -198,6 +204,7 @@ func readConfig(cfg Config) (Config, error) {
 	if cfg.BWSBinary == "" {
 		cfg.BWSBinary = "bws"
 	}
+	cfg.RootDir = root
 	return cfg, nil
 }
 func validUUID(s string) bool {
@@ -278,6 +285,17 @@ type cliProvider struct {
 func (p cliProvider) Fetch(ctx context.Context, req Request) (map[string]string, error) {
 	cfg := p.cfg
 	if req.ProjectID == "" {
+		_, grantRoot, grantErr := discoverBrokerGrant(cfg.RootDir, req.Selector)
+		if grantErr != nil {
+			return nil, grantErr
+		}
+		if grantRoot != "" {
+			out, err := commandOutput(ctx, nil, cfg.AmonHenBinary, "broker", "fetch", "--repo", grantRoot, "--project", req.Selector)
+			if err != nil {
+				return nil, fmt.Errorf("lhaw: broker configuration retrieval: %w", err)
+			}
+			return parseSecrets(out)
+		}
 		binary, err := exec.LookPath(cfg.AmonHenBinary)
 		if err == nil {
 			uuidBytes, e := commandOutput(ctx, nil, binary, "project", "uuid", "-N", req.Selector)

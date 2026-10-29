@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -89,14 +90,19 @@ func TestModuleRootDiscovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestModuleRootDiscoveryHelper$")
+	cmd.Dir = nested
+	cmd.Env = append(os.Environ(), "LHAW_TEST_DISCOVERY_ROOT="+root)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("module discovery helper: %v\n%s", err, output)
 	}
-	if err := os.Chdir(nested); err != nil {
-		t.Fatal(err)
+}
+
+func TestModuleRootDiscoveryHelper(t *testing.T) {
+	root := os.Getenv("LHAW_TEST_DISCOVERY_ROOT")
+	if root == "" {
+		t.Skip("run by TestModuleRootDiscovery")
 	}
-	t.Cleanup(func() { _ = os.Chdir(cwd) })
 	cfg, err := readConfig(Config{})
 	if err != nil {
 		t.Fatal(err)

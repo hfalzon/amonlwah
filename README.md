@@ -9,11 +9,21 @@ No shell wrapper or token argument is required in everyday use.
 ```go
 import lhaw "github.com/hfalzon/amonlwah/go"
 
-if err := lhaw.Load("gadget-dev"); err != nil {
+if err := lhaw.Load(); err != nil {
     return err
 }
 // Existing os.Getenv consumers now see the selected project's values.
 ```
+
+Replace the application's existing dotenv load call with `lhaw.Load()`. When
+the repository has one Amon Hen grant in `.amonlhaw/grants/`, Lhaw selects that
+project automatically and fetches configuration from the running host broker.
+It discovers repository grants from nested directories and nested Go modules.
+No project argument, test runner, or Go environment setting is required.
+Multiple grants require a selector in `.lhaw.json`; explicit selectors and
+project UUIDs take precedence. Broker failures are reported without falling
+back to another credential. If neither a selection nor a grant exists, the
+existing dotenv/environment-only behaviour remains available.
 
 For tests, call the loader from each participating package's TestMain, using
 one shared application-owned test helper if desired:
